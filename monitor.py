@@ -1,4 +1,4 @@
-import psutil, time, datetime
+import psutil, time, datetime, os, json
 from inky import InkyPHAT
 # init the inky display
 inky_display = InkyPHAT("red")
@@ -7,9 +7,9 @@ from PIL import Image, ImageFont, ImageDraw
 print(""" The Inky system monitor """)
 
 
-class System_stats():
+class System_stats(object):
 
-    def __init__(self, interval=1, choice_menu=["cpu%", "mem%", "disk%", "uptime", "time" ]):
+    def __init__(self, interval=1, choice_menu=["cpu%", "mem%", "disk%", "uptime", "time", "hostname" ]):
         self.choice_menu = choice_menu
         self.interval = interval
         # initialize the disired statistics
@@ -31,6 +31,8 @@ class System_stats():
             self.stats["uptime"] = str(datetime.datetime.now() - datetime.datetime.fromtimestamp(psutil.boot_time())).split(".")[0]
         elif choice == "time":
             self.stats["time"] = str(datetime.datetime.now().strftime("%H:%M %Y/%m/%d"))
+        elif choice == "hostname":
+            self.stats["hostname"] = str(os.uname()[1])
         # ideas:
         # monitor higher core utilization
         # monitor gpu utilization with gpustat
@@ -55,8 +57,62 @@ class System_stats():
             display.render(self.stats)
             i += 1
 
-def dictToString(dict):
-      return str(dict).replace(', ','\r\n').replace("u'","").replace("'","")[1:-1]
+
+
+class Host_daemon(System_stats):
+    
+    
+    def __init__(self, interval):
+        super().__init__(interval)
+
+    def get_stats(self):
+        failed_transfers = 0
+        display = Display()
+        while True:
+            begin = datetime.datetime.now()
+            try : 
+                self.update()
+                # display.render(self.stats)
+            except: 
+                print("Could not update values")
+            try: 
+                with open("stats.json", "w") as outfile:
+                    json.dump(self.stats, outfile)
+                os.system("scp ./stats.json pi@192.168.1.6:/home/pi/inky_monitor")
+            except: 
+                print("Could not transfer data")
+                failed_transfers += 1
+                if failed_transfers > 10:
+                    break
+            end = datetime.datetime.now()
+            pausetime = self.interval - (end-begin).total_seconds()
+            pausetime = (pausetime > 0)*pausetime
+            time.sleep(pausetime)
+        
+
+class Display_daemon(System_stats):
+    def __init__(self, interval):
+        super().__init__(interval)
+        self._cached_stamp = 0
+        self.filename = "./stats.json"
+
+    def check_file(self):
+        stamp = os.stat(self.filename).st_mtime
+        if stamp >  self._cached_stamp:
+            self._cached_stamp = stamp
+            return True
+        else:
+            return False
+
+    def display_remote_stats(self):
+        display= Display()
+        while True:
+            if self.check_file():
+                with open(self.filename, "r") as infile:
+                    self.stats =  json.load(infile)
+                display.render(self.stats)
+            else:
+                time.sleep(0.1)               
 
 
 class Sketch(object):
@@ -134,7 +190,13 @@ class Sketch(object):
         rbc = (142, 90)
         self.dynamic_circle(tlc, rbc, self.stats["mem%"], "RAM")
 
+    def hostname(self):
+        tlc = (0, 0)
+        self.draw.text((0, 0), self.stats["hostname"], self.black, self.smallfont)
 
+    def uptime(self):
+        self.text_right_align((214, 89), "up: {i}".format(i=self.stats["uptime"]), self.black, self.font)
+        
 
 class Display(object):
     """Initialize, create and send an image to the eink display """
@@ -145,8 +207,10 @@ class Display(object):
         """ choose what to add to the image """
         self.sketch = Sketch(self.draw, self.stats)
         self.sketch.time()
+        self.sketch.hostname()
         self.sketch.cpu()
         self.sketch.mem()
+        self.sketch.uptime()
         self.draw = self.sketch.draw
 
     def render(self, stats):
@@ -161,8 +225,10 @@ class Display(object):
 
     
 def main():
-    statistics = System_stats(10)
-    statistics.monitor()
+    
+
+    daemon = Display_daemon(25)
+    daemon.display_remote_stats()
 
 if __name__ == "__main__":
     main()
