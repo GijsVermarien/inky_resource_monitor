@@ -5,8 +5,8 @@ import datetime
 import os
 import json
 import argparse
-from inky import InkyPHAT
 import logging
+import subprocess
 try: 
     import gpustat
     can_gpu = True
@@ -14,15 +14,19 @@ except:
     can_gpu= False
     logging.info("Could not retrieve the gpustat package, now we cannot get gpu stats")
 # init the inky display
-inky_display = InkyPHAT("red")
-inky_display.set_border(inky_display.RED)
+try: 
+    from inky import InkyPHAT
+    inky_display = InkyPHAT("red")
+    inky_display.set_border(inky_display.RED)
+except:
+    logging.info("Could not load inky display")
 print(""" The Inky system monitor """)
 
 
 class System_stats(object):
     """ The system that retrieves the statistics and writes them to self.stats"""
 
-    def __init__(self, interval=1, choice_menu=["cpu%", "mem%", "disk%", "uptime", "time", "hostname", "gpu%", "gpu_mem%"]):
+    def __init__(self, interval=1, choice_menu=["cpu%", "mem%", "disk%", "uptime", "time", "hostname", "gpu%"]):
         self.choice_menu = choice_menu
         self.interval = interval
         # initialize the disired statistics
@@ -95,8 +99,8 @@ class Host_daemon(System_stats):
             try:
                 with open("stats.json", "w") as outfile:
                     json.dump(self.stats, outfile)
-                scp_to_rpi = "scp .stats.json {adress}:{path}".format(adress=self.adress, path=self.path)
-                subprocess.call(scp_to_rpi)
+                scp_to_rpi = "scp ./stats.json {adress}:{path}".format(adress=self.adress, path=self.path)
+                subprocess.call(scp_to_rpi, shell=True)
                 failed_transfers = 0
             except:
                 print("Could not transfer data")
@@ -126,8 +130,11 @@ class Display_daemon(System_stats):
         else:
             return False
 
-    def display_remote_stats(self):
-        display = Display()
+    def display_remote_stats(self, gpu_switch):
+        if gpu_switch:
+            display = Gpu_display()
+        else:
+            display = Display()
         while True:
             if self.check_file():
                 with open(self.filename, "r") as infile:
@@ -211,7 +218,7 @@ class Sketch(object):
         self.dynamic_circle(tlc, rbc, self.stats["mem%"], "RAM")
 
     def gpu(self, tlc=(142, 20), rbc=(214, 90)):
-        self.dynamics_circle(tlc, rbc, self.stats["gpu%"], "GPU")
+        self.dynamic_circle(tlc, rbc, self.stats["gpu%"], "GPU")
 
     def hostname(self):
         tlc = (0, 0)
@@ -283,7 +290,7 @@ def main():
             default="0.0.0.0")
     parser.add_argument("--path", "-p", type=str, required = False, 
             help="the path of inky_resource_monitor on the rasperry pi",
-            default="home/pi/inky_resource_monitor")
+            default="/home/pi/inky_resource_monitor/")
     parser.add_argument("--refreshrate", "-r", type=int, required=False,
                         help="at which rate must the program refresh",
                         default=30)
@@ -294,9 +301,9 @@ def main():
     
     if args.mode == "display":
         daemon = Display_daemon(None)
-        daemon.display_remote_stats()
+        daemon.display_remote_stats(args.gpu)
     elif args.mode == "server":
-        daemon = Host_daemon(args.refreshrate)
+        daemon = Host_daemon(args.refreshrate, args.ssh_adress, args.path)
         daemon.watch_stats()
     else: 
         daemon = System_stats(args.refreshrate)
