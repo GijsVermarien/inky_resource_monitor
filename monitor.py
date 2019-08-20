@@ -10,7 +10,7 @@ import logging
 try: 
     import gpustat
     can_gpu = True
-else: 
+except: 
     can_gpu= False
     logging.info("Could not retrieve the gpustat package, now we cannot get gpu stats")
 # init the inky display
@@ -20,14 +20,15 @@ print(""" The Inky system monitor """)
 
 
 class System_stats(object):
+    """ The system that retrieves the statistics and writes them to self.stats"""
 
-    def __init__(self, interval=1, choice_menu=["cpu%", "mem%", "disk%", "uptime", "time", "hostname"]):
+    def __init__(self, interval=1, choice_menu=["cpu%", "mem%", "disk%", "uptime", "time", "hostname", "gpu%", "gpu_mem%"]):
         self.choice_menu = choice_menu
         self.interval = interval
         # initialize the disired statistics
         self.stats = {}
         self.iter_over_choice(self.psutil_choose)
-        print("initialized the system statistics")
+        logging.info("Initialized the system statistics monitor")
 
     def psutil_choose(self, choice):
         """ choose a metric, retrieve it and then 
@@ -43,18 +44,16 @@ class System_stats(object):
             ) - datetime.datetime.fromtimestamp(psutil.boot_time())).split(".")[0]
         elif choice == "time":
             self.stats["time"] = str(
-                datetime.datetime.now().strftime("%H:%M %Y/%m/%d"))
+                datetime.datetime.now().strftime("%H:%M %m/%d"))
         elif choice == "hostname":
             self.stats["hostname"] = str(os.uname()[1])
-        elif choice == "gpu" and can_gpu:
+        elif choice == "gpu%" and can_gpu:
             try: 
-                # todo implement gpustat
-                self.stats["gpu"] = None
+                self.stats["gpu%"] = gpustat.new_query()[0].utilization
             except :
-                self.stats["gpu"] = np.nan
+                self.stats["gpu%"] = "NaN"
         # ideas:
         # monitor higher core utilization
-        # monitor gpu utilization with gpustat
 
     def iter_over_choice(self, function):
         """ Do not pass functions that require that
@@ -64,36 +63,40 @@ class System_stats(object):
             function(choice)
 
     def update(self):
+        """ Update all the chosen stats and return the new ones """
         self.iter_over_choice(self.psutil_choose)
         return self.stats
 
     def watch_and_display_stats(self):
+        """ Simple script to monitor on the Raspberry pi itself locally """
         display = Display()
-        while true: 
+        while True: 
             time.sleep(self.interval)
             self.update()
             display.render(self.stats)
 
 
 class Host_daemon(System_stats):
+    """Extension of System_stats in order to run as solely a host."""
 
-    def __init__(self, interval):
+    def __init__(self, interval, ssh_adress, rpi_path = "/home/pi/inky_resource_monitor"):
         super().__init__(interval)
+        self.path = rpi_path
+        self.adress = ssh_adress
 
     def watch_stats(self):
         failed_transfers = 0
-        display = Display()
         while True:
             begin = datetime.datetime.now()
             try:
                 self.update()
-                # display.render(self.stats)
             except:
                 print("Could not update values")
             try:
                 with open("stats.json", "w") as outfile:
                     json.dump(self.stats, outfile)
-                os.system("scp ./stats.json pi@192.168.1.6:/home/pi/inky_monitor")
+                scp_to_rpi = "scp .stats.json {adress}:{path}".format(adress=self.adress, path=self.path)
+                subprocess.call(scp_to_rpi)
                 failed_transfers = 0
             except:
                 print("Could not transfer data")
@@ -107,6 +110,9 @@ class Host_daemon(System_stats):
 
 
 class Display_daemon(System_stats):
+    """ Extension of System_stats in order to display the statistics
+    of another system"""
+
     def __init__(self, interval):
         super().__init__(interval)
         self._cached_stamp = 0
@@ -132,7 +138,7 @@ class Display_daemon(System_stats):
 
 
 class Sketch(object):
-    """ Called sketch because draw was already taken, contains all the variables that can be drawn."""
+    """ Called sketch because draw was already taken, does the actual drawing."""
 
     def __init__(self, draw, stats):
         self.draw = draw
@@ -198,25 +204,24 @@ class Sketch(object):
         self.text_right_align(
             (214, 0), self.stats["time"], self.black, self.font)
 
-    def cpu(self):
-        tlc = (0, 20)  # Define top left corner
-        rbc = (70, 90)  # Define bottom right corner
+    def cpu(self, tlc=(0, 20), rbc=(70, 90)):
         self.dynamic_circle(tlc, rbc, self.stats["cpu%"], "CPU")
 
-    def mem(self):
-        tlc = (72, 20)
-        rbc = (142, 90)
+    def mem(self, tlc=(71, 20), rbc=(141, 90)):
         self.dynamic_circle(tlc, rbc, self.stats["mem%"], "RAM")
+
+    def gpu(self, tlc=(142, 20), rbc=(214, 90)):
+        self.dynamics_circle(tlc, rbc, self.stats["gpu%"], "GPU")
 
     def hostname(self):
         tlc = (0, 0)
         self.draw.text(
-            (0, 0), self.stats["hostname"], self.black, self.smallfont)
+            (0, 0), self.stats["hostname"], self.black, self.font)
 
     def uptime(self):
         self.text_right_align((214, 89), "up: {i}".format(
             i=self.stats["uptime"]), self.black, self.font)
-
+    
 
 class Display(object):
     """Initialize, create and send an image to the eink display """
@@ -229,8 +234,8 @@ class Display(object):
         self.sketch = Sketch(self.draw, self.stats)
         self.sketch.time()
         self.sketch.hostname()
-        self.sketch.cpu()
-        self.sketch.mem()
+        self.sketch.cpu(tlc=(35, 20), rbc=(105, 90))
+        self.sketch.mem(tlc=(104, 20), rbc=(179, 90))
         self.sketch.uptime()
         self.draw = self.sketch.draw
 
@@ -243,15 +248,47 @@ class Display(object):
         inky_display.set_image(self.img)
         inky_display.show()
 
+class Gpu_display(Display):
+    def __init__(self):
+        pass
+
+    def compose(self):
+        """ choose what to add to the image """
+        self.sketch = Sketch(self.draw, self.stats)
+        self.sketch.time()
+        self.sketch.hostname()
+        self.sketch.cpu()
+        self.sketch.mem()
+        self.sketch.gpu()
+        self.sketch.uptime()
+        self.draw = self.sketch.draw
+
+## Source: stackoverflow
+def str2bool(v):
+    if isinstance(v, bool):
+       return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", "-m", type=str, required=True, choices=[
                         "local", "server", "display"], help="choose the mode of operation")
-    parser.add_argument("--ip", "-i", type=str, required=False,
-                        help="the ip adress of the display", default="0.0.0.0")
+    parser.add_argument("--ssh_adress", "-s", type=str, required=False,
+            help="the username and ip adress for the display i.e. pi@192.168.0.7",
+            default="0.0.0.0")
+    parser.add_argument("--path", "-p", type=str, required = False, 
+            help="the path of inky_resource_monitor on the rasperry pi",
+            default="home/pi/inky_resource_monitor")
     parser.add_argument("--refreshrate", "-r", type=int, required=False,
-                        help="at which rate must the program refresh", default=30)
+                        help="at which rate must the program refresh",
+                        default=30)
+    parser.add_argument("--gpu", "-g", type=str2bool, required=False, 
+	    help="do you want to monitor you nvidia gpu?", default=False)
     # idea: add an option that allows for choosing what to watch, as defined in the System_stats
     args = parser.parse_args()
     
@@ -262,7 +299,7 @@ def main():
         daemon = Host_daemon(args.refreshrate)
         daemon.watch_stats()
     else: 
-        daemon = System_stats(arg.refreshrate)
+        daemon = System_stats(args.refreshrate)
         daemon.watch_and_display_stats()
     print("shutting the service down")
 
