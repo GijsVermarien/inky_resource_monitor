@@ -1,4 +1,5 @@
 from PIL import Image, ImageFont, ImageDraw
+import argparse
 import psutil
 import time
 import datetime
@@ -16,9 +17,10 @@ except:
     logging.info("Could not retrieve the gpustat package, now we cannot get gpu stats")
 # init the inky display
 try: 
-    from inky import InkyPHAT
-    inky_display = InkyPHAT("red")
-    inky_display.set_border(inky_display.RED)
+    from inky.auto import auto
+    from PIL import Image, ImageFont, ImageDraw
+    inky_display = auto(ask_user=True, verbose=True)
+    inky_display.set_border(inky_display.WHITE)
 except:
     logging.info("Could not load inky display")
 print(""" The Inky system monitor """)
